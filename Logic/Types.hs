@@ -9,6 +9,9 @@ class Arithmetic a where
     add :: a -> a -> a
     sub :: a -> a -> a
 
+class Sequential a where
+  update :: Bit -> Bit -> a -> a
+
 -- [Bit] are always ordered from LSB on the left to MSB on the right
 data Bit = Zero | One 
     deriving (Show, Eq)
