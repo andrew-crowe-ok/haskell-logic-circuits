@@ -9,7 +9,8 @@ import Prelude hiding (not, and, or)
 import System.IO (hFlush, stdout) 
 import Logic.Gates ()
 import Logic.Circuits ()
-import Logic.Types ( Byte(Byte), Arithmetic(add) ) 
+import Logic.Classes
+import Logic.Types ( Byte(Byte) ) 
 import Logic.Utils ( int2bit, bit2string, bit2intUnsigned, parseBinaryString, bit2intSigned )
 import Logic.Byte ( int2byteSigned, byteToIntUnsigned, byteToIntSigned )
 

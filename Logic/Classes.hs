@@ -1,11 +1,10 @@
 module Logic.Classes where
 
-import Logic.Types ( Bit(..) )
-
--- Define the typeclass interface
 class Arithmetic a where
-    add :: a -> a -> a
-    sub :: a -> a -> a
+    geminiAdd :: a -> a -> a
+    geminiSub :: a -> a -> a
 
-class Sequential a where
-  update :: Bit -> Bit -> a -> a
+-- 'input' represents the signals entering the circuit (e.g., Data, Clock)
+-- 'state' represents the memory holding the data
+class Sequential input state where
+  update :: input -> state -> state

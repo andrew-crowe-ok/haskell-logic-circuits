@@ -1,6 +1,7 @@
 module Logic.Byte where
 
 import Logic.Types
+import Logic.Classes
 import Logic.Circuits (rippleAddN)
 import qualified Logic.Gates as G
 import Logic.Utils (int2bit, bit2intUnsigned)
