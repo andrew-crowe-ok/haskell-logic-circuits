@@ -1,209 +1,177 @@
-{-
-A simulation of logic circuits, from nand to a ripple-carry adder.
--}
-
+{-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-unused-imports #-}
-{- HLINT ignore "Use when" -}
 
 module Main where
 
-import Prelude hiding (not, and, or) 
-import System.IO      (hFlush, stdout)
-import System.Process (callCommand)
+import Layoutz 
+import Byte    ( byteToIntUnsigned, byteToIntSigned, int2byteSigned )
+import Utils   ( int2bit, parseBinaryString, bit2string, bit2intUnsigned )
+import Classes ( Arithmetic(add) )
+import System.IO (hSetEncoding, hSetBuffering, hSetEcho, stdout, stdin, utf8, BufferMode(NoBuffering))
 
-import Bit
-import Gates
-import Circuits
-import Classes
-import Utils
-import Byte
-import Types
+--------------------------------------------------------------------------------
+-- 1. MODEL
+--------------------------------------------------------------------------------
 
+data AppMode = UnsignedAdd | SignedAdd | DecToBin | BinToDec 
+    deriving (Eq, Show, Enum, Bounded)
 
--- Entry point
+data ActiveField = FieldA | FieldB 
+    deriving (Eq, Show)
+
+data AppModel = AppModel
+    { inputA      :: String
+    , inputB      :: String
+    , result      :: String
+    , mode        :: AppMode
+    , activeField :: ActiveField
+    }
+
+nextMode :: AppMode -> AppMode
+nextMode m = if m == maxBound then minBound else succ m
+
+--------------------------------------------------------------------------------
+-- 2. ACTIONS 
+--------------------------------------------------------------------------------
+
+data AppAction
+    = TypeChar Char
+    | Backspace
+    | ToggleMode
+    | ToggleFocus
+    | Calculate
+
+--------------------------------------------------------------------------------
+-- 3. UPDATE
+--------------------------------------------------------------------------------
+
+-- Renamed from appUpdate to handleAction to avoid naming collision
+handleAction :: AppAction -> AppModel -> (AppModel, Cmd AppAction)
+handleAction action model = case action of
+    TypeChar c -> 
+        let m' = case activeField model of
+                FieldA -> model { inputA = inputA model ++ [c] }
+                FieldB -> model { inputB = inputB model ++ [c] }
+        in (m', CmdNone)
+        
+    Backspace -> 
+        let safeInit "" = ""
+            safeInit s  = init s
+            m' = case activeField model of
+                FieldA -> model { inputA = safeInit (inputA model) }
+                FieldB -> model { inputB = safeInit (inputB model) }
+        in (m', CmdNone)
+
+    ToggleMode -> 
+        (model { mode = nextMode (mode model), result = "" }, CmdNone)
+        
+    ToggleFocus -> 
+        let nextF = if activeField model == FieldA then FieldB else FieldA
+        in (model { activeField = nextF }, CmdNone)
+
+    Calculate -> 
+        (model { result = performCalculation model }, CmdNone)
+
+performCalculation :: AppModel -> String
+performCalculation model = case mode model of
+    UnsignedAdd -> 
+        case (reads (inputA model) :: [(Int, String)], reads (inputB model) :: [(Int, String)]) of
+            ([(a, "")], [(b, "")]) -> 
+                let res = add (int2byteSigned a) (int2byteSigned b)
+                in show (byteToIntUnsigned res)
+            _ -> "Error: Invalid integer input"
+            
+    SignedAdd -> 
+        case (reads (inputA model) :: [(Int, String)], reads (inputB model) :: [(Int, String)]) of
+            ([(a, "")], [(b, "")]) -> 
+                let res = add (int2byteSigned a) (int2byteSigned b)
+                in show (byteToIntSigned res)
+            _ -> "Error: Invalid integer input"
+            
+    DecToBin -> 
+        case reads (inputA model) :: [(Int, String)] of
+            ([(n, "")]) -> case int2bit n of
+                Just bits -> reverse $ bit2string bits
+                Nothing   -> "Error: Input must be >= 0"
+            _ -> "Error: Invalid integer input"
+            
+    BinToDec -> 
+        case parseBinaryString (inputA model) of
+            Just bits -> show (bit2intUnsigned bits)
+            Nothing   -> "Error: Invalid binary string"
+
+--------------------------------------------------------------------------------
+-- 4. SUBSCRIPTIONS
+--------------------------------------------------------------------------------
+
+-- Renamed to handleSubs for consistency
+handleSubs :: AppModel -> Sub AppAction
+handleSubs _ = subKeyPress $ \key -> case key of
+    KeyChar 'm'  -> Just ToggleMode
+    KeyChar c    -> if c `elem` ("0123456789-" :: String) then Just (TypeChar c) else Nothing
+    KeyBackspace -> Just Backspace
+    KeyTab       -> Just ToggleFocus
+    KeyEnter     -> Just Calculate
+    _            -> Nothing
+
+--------------------------------------------------------------------------------
+-- 5. VIEW
+--------------------------------------------------------------------------------
+
+renderView :: AppModel -> L
+renderView model = layout
+    [ box "Haskell Logic Circuit Simulator"
+        [ text $ "Mode: " ++ show (mode model)
+        , text "-----------------------------------------"
+        
+        , row 
+            [ text $ if activeField model == FieldA then "> Input A: " else "  Input A: "
+            , let valA = inputA model ++ if activeField model == FieldA then "_" else ""
+              in text (if null valA then " " else valA)
+            ]
+            
+        , if mode model `elem` [DecToBin, BinToDec]
+            then text " " -- Fixed: Replaced "" with " "
+            else row 
+                [ text $ if activeField model == FieldB then "> Input B: " else "  Input B: "
+                , let valB = inputB model ++ if activeField model == FieldB then "_" else ""
+                  in text (if null valB then " " else valB) -- Fixed: Prevents empty text node
+                ]
+                
+        , text "-----------------------------------------"
+        , text $ "Result: " ++ result model
+        ]
+    , br
+    , ul [ "Controls:"
+         , "  [Tab]   Switch Input Field"
+         , "  [m]     Change Mode"
+         , "  [Enter] Calculate"
+         , "  [ESC]   Quit Simulator"
+         ]
+    ]
+
+--------------------------------------------------------------------------------
+-- 6. MAIN APP RUNNER
+--------------------------------------------------------------------------------
+
+logicSimApp :: LayoutzApp AppModel AppAction
+logicSimApp = LayoutzApp
+    { appInit          = (AppModel "" "" "" UnsignedAdd FieldA, CmdNone)
+    , appUpdate        = handleAction
+    , appSubscriptions = handleSubs
+    , appView          = renderView
+    }
+
 main :: IO ()
 main = do
-  putStrLn "\n============================================"
-  putStrLn "      HASKELL LOGIC CIRCUIT SIMULATOR"
-  putStrLn "============================================"
-  menuLoop 
-
-
--- The Recursive Menu Loop
-menuLoop :: IO ()
-menuLoop = do
-  putStrLn "\nSELECT AN OPERATION:"
-  putStrLn "1. Convert Decimal to Binary"
-  putStrLn "2. Convert Unsigned Binary to Decimal"
-  putStrLn "3. Unsigned Addition (0 to 255)"     
-  putStrLn "4. Signed Addition (-128 to 127)"   
-  putStrLn "5. View Utility Function Reference (Help)"
-  putStrLn "6. Enter function mode (REPL)"
-  putStrLn "7. Exit simulation"
-  
-  putStr ">> "
-  hFlush stdout
-  
-  choice <- getLine
-  case choice of
-    "1" -> runDecToBin    >> menuLoop
-    "2" -> runBinToDec    >> menuLoop
-    "3" -> runUnsignedAdd >> menuLoop
-    "4" -> runSignedAdd   >> menuLoop
-    "5" -> runHelp        >> menuLoop
-    "6" -> do
-        putStrLn "\nLoading function mode... (Type ':quit' to return to menu)"
-        callCommand "cabal repl logic-sim"
-        menuLoop
-    "7" -> putStrLn "Exiting simulation. Goodbye!"
-    _   -> putStrLn "Invalid selection. Please try again." >> menuLoop
-
-
--------------------------------------------------------------------------
--- MENU ACTIONS
--- These "Wrapper Functions" handle the IO and call your pure logic
--------------------------------------------------------------------------
-
--- Option 1: Decimal -> Binary
-runDecToBin :: IO ()
-runDecToBin = do
-    putStr "Enter a non-negative decimal number (e.g., 42): "
-    hFlush stdout
-    input <- getLine
-    let n = read input :: Int
+    -- 1. Set Encoding
+    hSetEncoding stdout utf8
+    hSetEncoding stdin utf8
     
-    case int2bit n of
-      Just bits -> do
-        let output = reverse $ bit2string bits
-        putStrLn $ "Binary Output: " ++ output
-      Nothing -> 
-        putStrLn "Error: Invalid input. Please enter a non-negative integer."
-
-
--- Option 2: Binary -> Decimal
-runBinToDec :: IO ()
-runBinToDec = do
-    putStr "Enter a binary string (e.g., 101010): "
-    hFlush stdout
-    input <- getLine
+    -- 2. Disable Windows Input Buffering
+    hSetBuffering stdin NoBuffering
+    hSetBuffering stdout NoBuffering
+    hSetEcho stdin False
     
-    case parseBinaryString input of
-      Just bits -> do
-        let n = bit2intUnsigned bits
-        putStrLn $ "Decimal Output: " ++ show n
-      Nothing ->
-        putStrLn "Error: Invalid binary string containing non-binary characters."
-
-
--- Option 3: Unsigned Addition (Wraps at 255)
-runUnsignedAdd :: IO ()
-runUnsignedAdd = do
-  putStrLn "\n--- Unsigned Mode (0 to 255) ---"
-  putStr "Enter first number: "
-  hFlush stdout
-  inputA <- getLine
-  
-  putStr "Enter second number: "
-  hFlush stdout
-  inputB <- getLine
-  
-  let a = read inputA :: Int
-  let b = read inputB :: Int
-  
-  -- 1. ENCODE: Convert Int to 8-bit Byte
-  -- We use int2byteSigned generically because it just fills bits
-  let byteA = int2byteSigned a
-  let byteB = int2byteSigned b
-  
-  -- 2. CIRCUIT: Run the Adder
-  -- This uses rippleAddN internally and truncates to 8 bits
-  let resultByte = add byteA byteB
-  
-  -- 3. DECODE: Interpret result as Unsigned
-  let resultInt = byteToIntUnsigned resultByte
-  
-  -- Unwrapping, reversing, then showing the result
-  putStrLn $ "Binary Calculation: " ++ show (let (Byte bits) = byteA in Byte (reverse bits)) 
-                                    ++ " + " ++ 
-                                    show (let (Byte bits) = byteB in Byte (reverse bits))
-  putStrLn $ "Int/Binary Result: " ++ show resultInt ++ " / " ++ show 
-  
-  -- Check for visual overflow (if logic result != math result)
-  if (a + b) /= resultInt 
-  then putStrLn "NOTE: Overflow occurred (Result > 255 wrapped around)"
-  else return ()
-
-
--- Option 4: Signed Addition (Wraps at 127/-128)
-runSignedAdd :: IO ()
-runSignedAdd = do
-  putStrLn "\n--- Signed Mode (-128 to 127) ---"
-  putStr "Enter first number: "
-  hFlush stdout
-  inputA <- getLine
-  
-  putStr "Enter second number: "
-  hFlush stdout
-  inputB <- getLine
-  
-  let a = read inputA :: Int
-  let b = read inputB :: Int
-  
-  -- 1. ENCODE: Convert Int to 8-bit Byte
-  -- Handles negative inputs by creating 2's complement bits
-  let byteA = int2byteSigned a
-  let byteB = int2byteSigned b
-  
-  -- 2. CIRCUIT: Run the Adder
-  -- EXACT SAME CIRCUIT as Unsigned!
-  let resultByte = add byteA byteB
-  
-  -- 3. DECODE: Interpret result as Signed (Check MSB)
-  let resultInt = byteToIntSigned resultByte
-  
-  putStrLn $ "Binary Calculation: " ++ show (let (Byte bits) = byteA in Byte (reverse bits)) 
-                                    ++ " + " ++ 
-                                    show (let (Byte bits) = byteB in Byte (reverse bits))
-  putStrLn $ "Result: " ++ show resultInt 
-  
-  -- Check for overflow
-  if (a + b) /= resultInt
-    then putStrLn "NOTE: Overflow occurred (Result went out of -128..127 range)"
-    else return ()
-  
-
--- Option 5: HELP / Reference Guide
-runHelp :: IO ()
-runHelp = do
-  putStrLn "\n=============================="
-  putStrLn "  UTILITY FUNCTION REFERENCE    "
-  putStrLn "=============================="
-  putStrLn "\nTo access these functions directly, press Enter to leave this screen, then option 6 to enter function mode."
-  putStrLn "Note: 'Bit List' implies LSB-First order (e.g., [1, 2, 4, 8...])."
-  putStrLn "------------------------------------------------------------"
-  
-  putStrLn ""
-  putStrLn "1. int2bit :: Int -> Maybe [Bit]"
-  putStrLn "   Converts a decimal integer to a list of Bits."
-  putStrLn "   Usage: int2bit 6  ->  [Zero, One, One]"
-  putStrLn ""
-
-  putStrLn "2. parseBinaryString :: String -> Maybe [Bit]"
-  putStrLn "   Parses a string of '1's and '0's into a list of Bits."
-  putStrLn "   Usage: parseBinaryString \"110\"  ->  Just [Zero, One, One]"
-  putStrLn ""
-
-  putStrLn "3. bit2intUnsigned :: [Bit] -> Int"
-  putStrLn "   Converts a list of Bits to a non-negative decimal integer."
-  putStrLn "   Usage: bit2int [Zero, One]  ->  2"
-  putStrLn ""
-
-  putStrLn "4. bit2string :: [Bit] -> String"
-  putStrLn "    Formats a Bit list into a raw string (LSB-Left)."
-  putStrLn "    Usage: bit2string [Zero, One]  ->  \"01\""
-  
-  putStrLn ""
-  putStrLn "=================================="
-  putStrLn "Press Enter to return to menu..."
-  _ <- getLine
-  return ()
+    -- 3. Run App
+    runApp logicSimApp
