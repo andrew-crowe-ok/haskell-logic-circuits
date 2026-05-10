@@ -9,15 +9,15 @@ common warnings
 library
     import:           warnings
     exposed-modules:
-      Logic.Classes,
-      Logic.Types,
-      Logic.Bit,  
-      Logic.Byte,
-      Logic.Gates,
-      Logic.Circuits,
-      Logic.Memory,
-      Logic.CPU,
-      Logic.Utils
+      Classes,
+      Types,
+      Bit,  
+      Byte,
+      Gates,
+      Circuits,
+      Memory,
+      CPU,
+      Utils
     build-depends:    
       base >= 4.7 && < 5,
       mtl
@@ -32,14 +32,14 @@ executable logic-sim
         logicsim,
         layoutz,
         process
-    hs-source-dirs:   app
+    hs-source-dirs:   .
     default-language: Haskell2010
 
 test-suite logic-sim-test
     import:           warnings
     default-language: Haskell2010
     type:             exitcode-stdio-1.0
-    hs-source-dirs:   test
+    hs-source-dirs:   .
     main-is:          Tests.hs
     build-depends:    
         base,
