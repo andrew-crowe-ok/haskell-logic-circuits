@@ -15,7 +15,11 @@ import qualified System.Console.Terminal.Size as Term (size, Window(width, heigh
 -- 1. MODEL
 --------------------------------------------------------------------------------
 
-data AppMode = UnsignedAdd | SignedAdd deriving (Eq, Show, Enum, Bounded)
+data AppMode = UnsignedAdd | SignedAdd deriving (Eq, Enum, Bounded)
+
+instance Show AppMode where
+    show UnsignedAdd = "Unsigned Addition"
+    show SignedAdd   = "Signed Addition"
 
 data Focus = NumA | SwA Int | NumB | SwB Int deriving (Eq, Show)
 
@@ -30,9 +34,9 @@ data AppModel = AppModel
     }
 
 checkOverflow :: AppMode -> Byte -> Byte -> Bool
-checkOverflow UnsignedAdd a b = 
+checkOverflow UnsignedAdd a b =
     (byteToIntUnsigned a + byteToIntUnsigned b) > 255
-checkOverflow SignedAdd a b = 
+checkOverflow SignedAdd a b =
     let valA = byteToIntSigned a
         valB = byteToIntSigned b
         sumVal = valA + valB
@@ -43,7 +47,7 @@ getNumericValue UnsignedAdd b = byteToIntUnsigned b
 getNumericValue SignedAdd b = byteToIntSigned b
 
 syncFromStr :: String -> Byte
-syncFromStr str = 
+syncFromStr str =
     case reads str :: [(Int, String)] of
         [(n, "")] -> int2byteSigned n
         _         -> int2byteSigned 0
@@ -116,14 +120,14 @@ handleAction action model = case action of
                          in model { byteB = newByte, strB = syncFromByte (mode model) newByte }
         in (m', CmdNone)
 
-    TypeChar c -> 
+    TypeChar c ->
         let m' = case focus model of
                 NumA -> let ns = strA model ++ [c] in model { strA = ns, byteA = syncFromStr ns }
                 NumB -> let ns = strB model ++ [c] in model { strB = ns, byteB = syncFromStr ns }
                 _ -> model
         in (m', CmdNone)
-        
-    Backspace -> 
+
+    Backspace ->
         let m' = case focus model of
                 NumA -> let ns = if null (strA model) then "" else init (strA model)
                         in model { strA = ns, byteA = syncFromStr ns }
@@ -132,7 +136,7 @@ handleAction action model = case action of
                 _ -> model
         in (m', CmdNone)
 
-    ToggleMode -> 
+    ToggleMode ->
         let newMode = if mode model == UnsignedAdd then SignedAdd else UnsignedAdd
             m' = model { mode = newMode, strA = syncFromByte newMode (byteA model), strB = syncFromByte newMode (byteB model) }
         in (m', CmdNone)
@@ -144,12 +148,12 @@ handleAction action model = case action of
 handleSubs :: AppModel -> Sub AppAction
 handleSubs _ = subBatch
     [ subKeyPress $ \key -> case key of
-        KeyEscape    -> Just Quit 
+        KeyEscape    -> Just Quit
         KeyChar 'm'  -> Just ToggleMode
         KeyChar c | c `elem` ("0123456789-" :: String) -> Just (TypeChar c)
         KeyBackspace -> Just Backspace
-        KeyLeft      -> Just (MoveCursor 1)   
-        KeyRight     -> Just (MoveCursor (-1)) 
+        KeyLeft      -> Just (MoveCursor 1)
+        KeyRight     -> Just (MoveCursor (-1))
         KeyUp        -> Just (AdjustValue 1)
         KeyDown      -> Just (AdjustValue (-1))
         _            -> Nothing
@@ -166,27 +170,56 @@ renderBits f bits = tightRow $ map draw (reverse bits)
     pulse :: Double
     pulse = sin (fromIntegral f * 0.3)
     rVal  :: Int
-    rVal  = round $ 177 + (78 * pulse) 
-    draw One  = withColor (ColorTrue rVal 0 0) $ text "  ●   "
-    draw Zero = withColor (ColorTrue 40 0 0)   $ text "  ●   " 
+    rVal  = round $ 177 + (78 * pulse)
+    draw One  = tightRow [ withColor (ColorTrue 60 60 60) (text " [")
+                         , withStyle StyleBold $ withColor (ColorTrue rVal 0 0) (text "●")
+                         , withColor (ColorTrue 60 60 60) (text "] ")
+                         ]
+    draw Zero = tightRow [ withColor (ColorTrue 60 60 60) (text " [")
+                         , withColor (ColorTrue 40 0 0) (text "●")
+                         , withColor (ColorTrue 60 60 60) (text "] ")
+                         ]
 
-renderSwitches :: Int -> Focus -> String -> [Bit] -> L
-renderSwitches f foc target bits = 
+renderAluBits :: Int -> [Bit] -> L
+renderAluBits f bits = tightRow $ map draw (reverse bits)
+  where
+    pulse :: Double
+    pulse = sin (fromIntegral f * 0.3)
+    gVal  :: Int
+    gVal  = round $ 177 + (78 * pulse)
+    draw One  = tightRow [ withColor (ColorTrue 60 60 60) (text " [")
+                         , withStyle StyleBold $ withColor (ColorTrue 0 gVal 0) (text "⬤")
+                         , withColor (ColorTrue 60 60 60) (text "] ")
+                         ]
+    draw Zero = tightRow [ withColor (ColorTrue 60 60 60) (text " [")
+                         , withColor (ColorTrue 0 40 0) (text "⬤")
+                         , withColor (ColorTrue 60 60 60) (text "] ")
+                         ]
+
+renderSwitches :: Focus -> String -> [Bit] -> L
+renderSwitches foc target bits =
     let activeIdx = case foc of { SwA i | target == "A" -> i; SwB i | target == "B" -> i; _ -> -1 }
     in tightRow [ draw activeIdx i b | (i, b) <- zip [7,6..0] (reverse bits) ]
   where
-    pulse :: Double
-    pulse = sin (fromIntegral f * 0.4)
-    glowVal :: Int
-    glowVal = round $ 180 + (75 * pulse)
-    draw activeIdx i b = 
+    draw activeIdx i b =
         let isON = b == One
             char = if isON then "█" else "▄"
-            col  = if isON then ColorTrue 0 glowVal glowVal else ColorTrue 60 60 60
-            txt  = "  " ++ char ++ "   "
-        in if activeIdx == i 
-           then withStyle (StyleBold <> StyleUnderline) $ withColor ColorBrightWhite $ text txt
-           else withColor col $ text txt
+            col  = if isON then ColorTrue 0 255 255 else ColorTrue 60 60 60
+            lBracket = if activeIdx == i then withStyle StyleBold $ withColor ColorBrightWhite (text " [") else withColor (ColorTrue 60 60 60) (text "  ")
+            rBracket = if activeIdx == i then withStyle StyleBold $ withColor ColorBrightWhite (text "] ") else withColor (ColorTrue 60 60 60) (text "  ")
+            swChar   = if activeIdx == i then withStyle StyleBold $ withColor ColorBrightWhite (text char) else withColor col (text char)
+        in tightRow [lBracket, swChar, rBracket]
+
+renderDigitalDisplay :: Bool -> String -> L
+renderDigitalDisplay isFocused str =
+    let displayStr = str ++ (if isFocused then "_" else "")
+        padded = replicate (5 - length displayStr) ' ' ++ displayStr
+        bracketL = withColor (ColorTrue 60 60 60) $ text "  [ "
+        bracketR = withColor (ColorTrue 60 60 60) $ text " ]"
+        content = if isFocused
+                  then withStyle StyleBold $ withColor (ColorTrue 255 176 0) $ text padded
+                  else withColor (ColorTrue 150 100 0) $ text padded
+    in tightRow [ bracketL, content, bracketR ]
 
 renderView :: AppModel -> L
 renderView model = 
@@ -196,45 +229,51 @@ renderView model =
         (Byte resBits) = resByte
         isOV = checkOverflow (mode model) (byteA model) (byteB model)
         
-        w = 60 
+        w = 62 
         centerTxt s = let p = max 0 (w - length s) `div` 2 in replicate p ' ' ++ s ++ replicate (w - length s - p) ' '
-        padLine s = s ++ replicate (max 0 (w - length s)) ' '
+        
+        thickDivider = withColor (ColorTrue 50 50 50) $ text (replicate w '▀')
+        thinDivider  = withColor (ColorTrue 50 50 50) $ text (replicate w '─')
+
+        renderHeader title =
+            let titleSpacing = "  " ++ title ++ "  "
+                leftBlocks = "███"
+                rightLen = max 0 (w - length titleSpacing - length leftBlocks)
+                rightBlocks = replicate rightLen '█'
+            in tightRow
+               [ withColor (ColorTrue 50 50 50) $ text leftBlocks
+               , withStyle StyleBold $ withColor ColorBrightWhite $ text titleSpacing
+               , withColor (ColorTrue 50 50 50) $ text rightBlocks
+               ]
+
     in layout
-    [ pad 1 $ withBorder BorderDouble $ box " Haskell Logic Circuit Simulator "
-        [ withStyle StyleBold $ text $ centerTxt "Mode:"
-        , withStyle StyleBold $ text $ centerTxt (show (mode model))
-        , withColor ColorBrightBlack $ text (replicate w '-')
+    [ pad 1 $ withBorder BorderDouble $ box " VECTRONIX SYSTEMS : MAINFRAME 2000 "
+        [ withStyle StyleBold $ withColor (ColorTrue 180 180 180) $ text $ centerTxt (show (mode model))
+        , thickDivider
         
-        , withColor ColorBrightGreen $ text $ padLine "[ Register A ]"
-        , row [ text "  LEDs:     ", renderBits (frame model) bitsA ]
-        , row [ text "  Switches: ", renderSwitches (frame model) (focus model) "A" bitsA ]
-        , row [ text $ if focus model == NumA then "  Numeric: >" else "  Numeric:  "
-              , let val = strA model ++ (if focus model == NumA then "_" else "")
-                in (if focus model == NumA then withColor ColorBrightCyan else id) (text val)
-              ]
-        , text (replicate w ' ')
+        , renderHeader "REGISTER A"
+        , tightRow [ text "   ", renderBits (frame model) bitsA ]
+        , tightRow [ text "   ", renderSwitches (focus model) "A" bitsA ]
+        , renderDigitalDisplay (focus model == NumA) (strA model)
         
-        , withColor ColorBrightGreen $ text $ padLine "[ Register B ]"
-        , row [ text "  LEDs:     ", renderBits (frame model) bitsB ]
-        , row [ text "  Switches: ", renderSwitches (frame model) (focus model) "B" bitsB ]
-        , row [ text $ if focus model == NumB then "  Numeric: >" else "  Numeric:  "
-              , let val = strB model ++ (if focus model == NumB then "_" else "")
-                in (if focus model == NumB then withColor ColorBrightCyan else id) (text val)
-              ]
-        , withColor ColorBrightBlack $ text (replicate w '-')
+        , thinDivider
         
-        , withColor ColorBrightRed $ text $ padLine "[ ALU Output ]"
-        , row [ text "  LEDs:     ", renderBits (frame model) resBits ]
-        , row [ text "  Overflow: ", if isOV then withColor (ColorTrue 255 0 0) (text " ● ") else withColor (ColorTrue 40 0 0) (text " ● ") ]
-        , text $ padLine ("  Numeric:  " ++ show (getNumericValue (mode model) resByte))
+        , renderHeader "REGISTER B"
+        , tightRow [ text "   ", renderBits (frame model) bitsB ]
+        , tightRow [ text "   ", renderSwitches (focus model) "B" bitsB ]
+        , renderDigitalDisplay (focus model == NumB) (strB model)
+        
+        , thickDivider
+        
+        , renderHeader "ALU ACCUMULATOR"
+        , tightRow [ text "   ", renderAluBits (frame model) resBits ]
+        , tightRow 
+            [ renderDigitalDisplay False (show (getNumericValue (mode model) resByte))
+            , text "      "
+            , if isOV then withStyle StyleBold $ withColor (ColorTrue 255 0 0) (text "● OVF") else withColor (ColorTrue 40 0 0) (text "● OVF") 
+            ]
         ]
-    , br
-    , withColor ColorBrightBlack $ ul 
-         [ "Controls:"
-         , "  [Arrows]      Cycle Focus / Adjust Value"
-         , "  [m]           Change Mode"
-         , "  [ESC]         Quit Simulator"
-         ]
+    , withColor ColorBrightBlack $ text "  CONTROLS: [Left/Right] Focus | [Up/Down] Adjust | [m] Mode | [ESC] Quit"
     ]
 
 --------------------------------------------------------------------------------
@@ -249,7 +288,6 @@ getInitialSize = do
         Just w  -> return (Term.width w, Term.height w)
         Nothing -> return (80, 24)
 
--- Added explicit type signature to resolve warning
 logicSimApp :: LayoutzApp AppModel AppAction
 logicSimApp = LayoutzApp
     { appInit = (AppModel (int2byteSigned 0) (int2byteSigned 0) "0" "0" UnsignedAdd NumA 0, CmdNone)
@@ -265,7 +303,7 @@ main = do
     hSetBuffering stdout (BlockBuffering Nothing) 
     hSetEcho stdin False
 
-    -- Check terminal size once at launch
+     -- Check terminal size once at launch
     (w, _) <- getInitialSize
 
     if w < 64
