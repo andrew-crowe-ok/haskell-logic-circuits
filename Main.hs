@@ -33,6 +33,8 @@ data AppModel = AppModel
     , displayBase    :: DisplayBase
     , frame          :: Int
     , lastInputFrame :: Int
+    , termW          :: Int
+    , termH          :: Int
     , logLines       :: [String]
     , decayA         :: [Int]
     , decayB         :: [Int]
@@ -255,7 +257,7 @@ handleSubs _ = subBatch
         KeyDown      -> Just (AdjustValue (-1))
         KeyChar c | c `elem` ("0123456789-" :: String) -> Just (TypeChar c)
         _            -> Nothing
-    , subEveryMs 100 AnimTick
+    , subEveryMs 10 AnimTick
     ]
 
 --------------------------------------------------------------------------------
@@ -368,8 +370,8 @@ renderStatusBar foc base =
             NumB   -> "REG B [ NUMERIC ENTRY ]"
             SwB i  -> "REG B [ SWITCH BIT " ++ show i ++ " ]"
         baseInfo = "BASE [ " ++ show base ++ " ]"
-    in withColor (ColorTrue 0 150 150) $ text $ 
-       "  STATUS: " ++ targetInfo ++ " | " ++ baseInfo
+    in tightRow [ text "    ", withColor (ColorTrue 0 150 150) $ text $
+       "STATUS: " ++ targetInfo ++ " | " ++ baseInfo ]
 
 renderSystemLights :: Int -> Int -> L
 renderSystemLights currentF lastF =
@@ -395,7 +397,6 @@ renderView :: AppModel -> L
 renderView model =
     let (Byte bitsA) = byteA model
         (Byte bitsB) = byteB model
-        -- resByte removed to fix -Wunused-local-binds
         isOV = checkOverflow (mode model) (byteA model) (byteB model)
 
         w = 72
@@ -408,7 +409,7 @@ renderView model =
                 remLen = max 0 (w - length str)
                 leftChars = replicate (remLen `div` 2) '═'
                 rightChars = replicate (remLen - (remLen `div` 2)) '═'
-            in withColor (ColorTrue 180 180 180) $ text (leftChars ++ str ++ rightChars)
+            in withColor (ColorTrue 80 80 80) $ text (leftChars ++ str ++ rightChars)
 
         renderHeader title =
             let titleSpacing = "  " ++ title ++ "  "
@@ -426,13 +427,11 @@ renderView model =
     in layout
     [ pad 1 $ withBorder BorderDouble $ box " (+) ≡≡ VECTRONIX SYSTEMS : MAINFRAME 2000 ≡≡ (+) " $
         [ tightRow [ text "   ", renderSystemLights (frame model) (lastInputFrame model) ]
-        , text " "
         , text $ centerTxt "MODE SELECTOR"
         , renderModeSwitch (mode model)
         
-        , text " " -- Vertical space
-        , withStyle StyleBold $ busDivider "I/O DATA BUS"
-        , thickDivider
+        , text " "
+        , busDivider "I/O DATA BUS"
 
         , renderHeader "REGISTER A"
         , tightRow [ text "                ", renderBits (frame model) bitsA (decayA model) ]
@@ -448,33 +447,30 @@ renderView model =
 
         , renderHeader "ALU ACCUMULATOR"
         , tightRow [ text "                ", renderAluBits (frame model) (aluDisplayBits model) (decayALU model) ]
-        
-        -- ALU readout uses aluDisplayBits to sync with the green LED propagation delay
         ] ++ renderDigitalDisplay (frame model) False (formatValue (displayBase model) (getNumericValue (mode model) (Byte (aluDisplayBits model)))) ovfLight ++
-        [ text " " -- Vertical space
-        , withStyle StyleBold $ withColor (ColorTrue 180 180 180) $ busDivider "DIAGNOSTIC LOGIC BUS"
-        , thickDivider
+        [ text " "
+        , busDivider "DIAGNOSTIC LOGIC BUS"
 
         , renderHeader "SYSTEM LOG"
-        , let padLog s = s ++ replicate (max 0 (w - 4 - length s)) ' '
-              logContent = if null (logLines model)
-                           then [text $ padLog "  > SYSTEM AWAITING INPUT..."]
-                           else map (text . padLog) (reverse $ logLines model)
-          in withColor (ColorTrue 0 100 0) $ box " " logContent
-
-        , text " " -- Vertical space above the panel
-        , thickDivider
+        ] ++ 
+        ( let linesToRender = if null (logLines model)
+                              then ["> SYSTEM AWAITING INPUT..."]
+                              else reverse (logLines model)
+          in map (\s -> tightRow [ text "    ", withColor (ColorTrue 0 100 0) (text s) ]) linesToRender
+        ) ++
+        [ text " "
         , renderHeader "STATE MONITOR"
         , renderStatusBar (focus model) (displayBase model)
         ]
-    , withStyle StyleBold $ withColor ColorBrightWhite $ 
-        text "  [Tab] Next | [b] Prev | [Space] Toggle | [m] Mode | [h] Base | [q] Quit"
+        
+    -- FOOTER
+    , withStyle StyleBold $ withColor ColorBrightWhite $ text "  [Tab] Next | [b] Prev | [Space] Toggle | [m] Mode | [h] Base | [q] Quit"
     ]
+
 --------------------------------------------------------------------------------
 -- 6. MAIN APP RUNNER
 --------------------------------------------------------------------------------
 
--- Safely queries the terminal size. Returns a default if it fails (e.g., in cabal run).
 getInitialSize :: IO (Int, Int)
 getInitialSize = do
     sz <- Term.size
@@ -482,24 +478,26 @@ getInitialSize = do
         Just w  -> return (Term.width w, Term.height w)
         Nothing -> return (80, 24)
 
-logicSimApp :: LayoutzApp AppModel AppAction
-logicSimApp = LayoutzApp
-    { appInit = (AppModel 
-        (int2byteSigned 0) -- byteA
-        (int2byteSigned 0) -- byteB
-        "0"                -- strA
-        "0"                -- strB
-        UnsignedAdd        -- mode
-        NumA               -- focus
-        Dec                -- displayBase
-        0                  -- frame
-        0                  -- lastInputFrame
-        []                 -- logLines
-        (replicate 8 0)    -- decayA
-        (replicate 8 0)    -- decayB
-        (replicate 8 0)    -- decayALU
-        (replicate 8 Zero) -- aluDisplayBits (THIS WAS MISSING)
-        , CmdNone)
+logicSimApp :: Int -> Int -> LayoutzApp AppModel AppAction
+logicSimApp w h = LayoutzApp
+    { appInit = (AppModel
+        { byteA          = int2byteSigned 0
+        , byteB          = int2byteSigned 0
+        , strA           = "0"
+        , strB           = "0"
+        , mode           = UnsignedAdd
+        , focus          = NumA
+        , displayBase    = Dec
+        , frame          = 0
+        , lastInputFrame = 0
+        , logLines       = []
+        , decayA         = replicate 8 0
+        , decayB         = replicate 8 0
+        , decayALU       = replicate 8 0
+        , aluDisplayBits = replicate 8 Zero
+        , termW          = w
+        , termH          = h
+        }, CmdNone)
     , appUpdate = handleAction
     , appSubscriptions = handleSubs
     , appView = renderView
@@ -507,23 +505,57 @@ logicSimApp = LayoutzApp
 
 runPostSequence :: IO ()
 runPostSequence = do
-    let delayMs ms = threadDelay (ms * 1000)
-    putStrLn "VECTRONIX SYSTEMS BIOS v1.04"
-    delayMs 1200
-    putStr "MEMORY CHECK "
-    delayMs 600
-    putStrLn "OK [640K]"
-    delayMs 900
-    putStr "INITIALIZING I/O BUS "
-    delayMs 1500
-    putStrLn "OK"
-    delayMs 600
-    putStr "MOUNTING LOGIC PROCESSOR "
-    delayMs 1800
-    putStrLn "OK"
-    delayMs 900
-    putStrLn "SYSTEM READY. TRANSFERRING CONTROL TO FRONT PANEL..."
-    delayMs 2400
+    let delayMs :: Int -> IO ()
+        delayMs ms = threadDelay (ms * 1000)
+        
+        typeStr :: String -> IO ()
+        typeStr s = mapM_ (\c -> putStr [c] >> delayMs 15) s
+        
+        dotWait :: Int -> IO ()
+        dotWait n = mapM_ (\_ -> putStr "." >> delayMs 200) [1..n]
+    
+    putStr "\ESC[32m" -- ANSI Green
+    typeStr "VECTRONIX SYSTEMS BIOS v1.04\n"
+    delayMs 500
+    
+    typeStr "0x0000 MEMORY CHECK "
+    dotWait 8
+    putStrLn " OK [640K]"
+    delayMs 300
+    
+    typeStr "0x001A INITIALIZING I/O BUS "
+    dotWait 5
+    putStrLn " OK"
+    delayMs 300
+    
+    typeStr "0x002F MOUNTING LOGIC PROCESSOR "
+    dotWait 3
+    putStrLn " OK"
+    delayMs 500
+    
+    typeStr "SYSTEM READY. TRANSFERRING CONTROL TO FRONT PANEL"
+    dotWait 5
+    putStrLn "\n"
+    putStr "\ESC[0m" -- ANSI Reset
+
+runShutdownSequence :: IO ()
+runShutdownSequence = do
+    let delayMs :: Int -> IO ()
+        delayMs ms = threadDelay (ms * 1000)
+        
+        typeStr :: String -> IO ()
+        typeStr s = mapM_ (\c -> putStr [c] >> delayMs 15) s
+
+    putStr "\ESC[2J\ESC[H\ESC[32m" -- Clear screen, cursor home, ANSI Green
+    typeStr "INITIATING SYSTEM HALT...\n"
+    delayMs 300
+    typeStr "0x00F0 FLUSHING REGISTERS.......... OK\n"
+    delayMs 300
+    typeStr "0x00FA DISCONNECTING I/O BUS....... OK\n"
+    delayMs 300
+    typeStr "0x00FF POWER DOWN COMPLETE.\n"
+    delayMs 800
+    putStr "\ESC[0m" -- ANSI Reset
 
 main :: IO ()
 main = do
@@ -532,26 +564,35 @@ main = do
     hSetBuffering stdin NoBuffering
     hSetEcho stdin False
 
-    (w, _) <- getInitialSize
+    (w, h) <- getInitialSize
 
-    if w < 64
+    -- Strict dimension enforcement
+    let minW = 76
+        minH = 34
+    
+    if w < minW || h < minH
         then do
-            putStrLn $ "Error: Terminal is too narrow (" ++ show w ++ " columns)."
+            putStrLn "\ESC[31mSYSTEM HALT: TERMINAL GEOMETRY EXCEPTION\ESC[0m"
+            putStrLn $ "REQUIRED BOUNDING BOX : " ++ show minW ++ "x" ++ show minH
+            putStrLn $ "CURRENT GEOMETRY      : " ++ show w ++ "x" ++ show h
+            putStrLn "\nPlease resize your terminal window and restart the system."
             exitFailure
         else do
-            putStr "\ESC[?25l"
-            putStr "\ESC[?1049h"
-            putStr "\ESC[?7l"
-            putStr "\ESC[2J\ESC[H"
+            putStr "\ESC[?25l"   -- Hide cursor
+            putStr "\ESC[?1049h" -- Switch to alternate screen buffer
+            putStr "\ESC[?7l"    -- Disable line wrapping
+            putStr "\ESC[2J\ESC[H" -- Clear screen
 
-            -- Use NoBuffering so the POST sequence prints as it happens
             hSetBuffering stdout NoBuffering
             runPostSequence
 
-            -- Switch to BlockBuffering right before the TUI starts to prevent flicker
             hSetBuffering stdout (BlockBuffering Nothing)
-            runApp logicSimApp
 
-            putStr "\ESC[?7h"
-            putStr "\ESC[?1049l"
-            putStr "\ESC[?25h"
+            runApp (logicSimApp w h)
+
+            hSetBuffering stdout NoBuffering
+            runShutdownSequence
+
+            putStr "\ESC[?7h"    -- Enable line wrapping
+            putStr "\ESC[?1049l" -- Restore main screen buffer
+            putStr "\ESC[?25h"   -- Show cursor
