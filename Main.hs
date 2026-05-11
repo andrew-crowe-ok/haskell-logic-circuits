@@ -41,6 +41,7 @@ data AppModel = AppModel
     , decayA         :: [Int]
     , decayB         :: [Int]
     , decayALU       :: [Int]
+    , aluDisplayBits :: [Bit]
     }
 
 checkOverflow :: AppMode -> Byte -> Byte -> Bool
@@ -99,15 +100,30 @@ data AppAction
 
 handleAction :: AppAction -> AppModel -> (AppModel, Cmd AppAction)
 handleAction action model = case action of
-    Quit             -> (model, CmdExit)
+
+    Quit -> (model, CmdExit)
+
     AnimTick ->
         let newF = frame model + 1
+            (Byte actualResBits) = add (byteA model) (byteB model)
+
+            rippleRtoL target current = reverse $ step (reverse target) (reverse current)
+              where
+                step [] [] = []
+                step (t:ts) (c:cs)
+                  | t == c    = t : step ts cs
+                  | otherwise = t : cs
+                step _ _ = []
+
+            newAluDisplay = rippleRtoL actualResBits (aluDisplayBits model)
+
             updateDecay (Byte bits) decays = zipWith (\b d -> if b == One then newF else d) bits decays
-            resByte = add (byteA model) (byteB model)
             newDecayA = updateDecay (byteA model) (decayA model)
             newDecayB = updateDecay (byteB model) (decayB model)
-            newDecayALU = updateDecay resByte (decayALU model)
-        in (model { frame = newF, decayA = newDecayA, decayB = newDecayB, decayALU = newDecayALU }, CmdNone)
+            newDecayALU = zipWith (\b d -> if b == One then newF else d) newAluDisplay (decayALU model)
+
+        in (model { frame = newF, decayA = newDecayA, decayB = newDecayB, decayALU = newDecayALU, aluDisplayBits = newAluDisplay }, CmdNone)
+
     CycleFocusForward ->
         let nextFocus = case focus model of
                 SwA 0 -> NumA
@@ -117,6 +133,7 @@ handleAction action model = case action of
                 SwB i -> SwB (i - 1)
                 NumB  -> SwA 7
         in (model { focus = nextFocus }, CmdNone)
+
     CycleFocusBackward ->
         let prevFocus = case focus model of
                 NumA  -> SwA 0
@@ -126,6 +143,7 @@ handleAction action model = case action of
                 SwB 7 -> NumA
                 SwB i -> SwB (i + 1)
         in (model { focus = prevFocus }, CmdNone)
+
     ToggleSwitch ->
         let toggle b = if b == One then Zero else One
             getBit idx (Byte bits) = bits !! idx 
@@ -149,6 +167,7 @@ handleAction action model = case action of
                        }
             logMsg = "> SYS CTRL: ARITHMETIC MODE SET TO " ++ show newMode
         in (recordActivity m' logMsg, CmdNone)
+
     ToggleBase ->
         let nextBase = if displayBase model == Oct then Dec else succ (displayBase model)
             m' = model { displayBase = nextBase
@@ -156,6 +175,7 @@ handleAction action model = case action of
                        , strB = syncFromByte (mode model) nextBase (byteB model)
                        }
         in (m', CmdNone)
+
     AdjustValue delta ->
         let m' = case focus model of
                 NumA -> let current = getNumericValue (mode model) (byteA model)
@@ -178,6 +198,7 @@ handleAction action model = case action of
                  NumB -> "> DATA ENTRY: REG B VALUE SHIFTED"
                  _    -> "> DATA ENTRY: VALUE SHIFTED"
         in (recordActivity m' logMsg, CmdNone)
+
     TypeChar c ->
         let m' = case focus model of
                 NumA -> let ns = strA model ++ [c] in model { strA = ns, byteA = syncFromStr ns }
@@ -185,6 +206,7 @@ handleAction action model = case action of
                 _ -> model
             logMsg = "> BUS INTERRUPT: REGISTER STATE ALTERED"
         in (recordActivity m' logMsg, CmdNone)
+
     Backspace ->
         let m' = case focus model of
                 NumA -> let ns = if null (strA model) then "" else init (strA model)
@@ -299,11 +321,11 @@ renderModeSwitch m =
     let labelU = if m == UnsignedAdd then "[ UNSIGNED ]" else "  UNSIGNED  "
         labelS = if m == SignedAdd   then "[  SIGNED  ]" else "   SIGNED   "
         lever  = if m == UnsignedAdd then "  (O)──┤  " else "  ├──(O)  "
-        
+
         fullStrLen = length labelU + length lever + length labelS
         padLen = max 0 (62 - fullStrLen) `div` 2
         padding = text (replicate padLen ' ')
-        
+
         lU = if m == UnsignedAdd then withStyle StyleBold (withColor ColorBrightWhite (text labelU)) else withColor (ColorTrue 60 60 60) (text labelU)
         lS = if m == SignedAdd   then withStyle StyleBold (withColor ColorBrightWhite (text labelS)) else withColor (ColorTrue 60 60 60) (text labelS)
         lLev = withColor ColorBrightWhite (text lever)
@@ -336,10 +358,10 @@ renderView model =
         resByte = add (byteA model) (byteB model)
         (Byte resBits) = resByte
         isOV = checkOverflow (mode model) (byteA model) (byteB model)
-        
+
         w = 62 
         centerTxt s = let p = max 0 (w - length s) `div` 2 in replicate p ' ' ++ s ++ replicate (w - length s - p) ' '
-        
+
         thickDivider = withColor (ColorTrue 50 50 50) $ text (replicate w '▀')
         thinDivider  = withColor (ColorTrue 50 50 50) $ text (replicate w '─')
 
@@ -376,7 +398,7 @@ renderView model =
         , thickDivider
         
         , renderHeader "ALU ACCUMULATOR"
-        , tightRow [ text "   ", renderAluBits (frame model) resBits (decayALU model) ]
+        , tightRow [ text "   ", renderAluBits (frame model) (aluDisplayBits model) (decayALU model) ]
         , tightRow 
             [ renderDigitalDisplay False (formatValue (displayBase model) (getNumericValue (mode model) resByte))
             , text "      "
@@ -408,8 +430,25 @@ getInitialSize = do
 
 logicSimApp :: LayoutzApp AppModel AppAction
 logicSimApp = LayoutzApp
-    { appInit = (AppModel (int2byteSigned 0) (int2byteSigned 0) "0" "0" UnsignedAdd NumA Dec 0 0 [] (replicate 8 0) (replicate 8 0) (replicate 8 0), CmdNone)
-    , appUpdate = handleAction, appSubscriptions = handleSubs, appView = renderView
+    { appInit = (AppModel 
+        (int2byteSigned 0) -- byteA
+        (int2byteSigned 0) -- byteB
+        "0"                -- strA
+        "0"                -- strB
+        UnsignedAdd        -- mode
+        NumA               -- focus
+        Dec                -- displayBase
+        0                  -- frame
+        0                  -- lastInputFrame
+        []                 -- logLines
+        (replicate 8 0)    -- decayA
+        (replicate 8 0)    -- decayB
+        (replicate 8 0)    -- decayALU
+        (replicate 8 Zero) -- aluDisplayBits (THIS WAS MISSING)
+        , CmdNone)
+    , appUpdate = handleAction
+    , appSubscriptions = handleSubs
+    , appView = renderView
     }
 
 runPostSequence :: IO ()
