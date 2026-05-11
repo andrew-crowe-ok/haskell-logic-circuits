@@ -257,7 +257,7 @@ handleSubs _ = subBatch
         KeyDown      -> Just (AdjustValue (-1))
         KeyChar c | c `elem` ("0123456789-" :: String) -> Just (TypeChar c)
         _            -> Nothing
-    , subEveryMs 10 AnimTick
+    , subEveryMs 100 AnimTick
     ]
 
 --------------------------------------------------------------------------------
