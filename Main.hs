@@ -68,8 +68,10 @@ setBitAt idx newBit (Byte bits) =
 data AppAction
     = TypeChar Char
     | Backspace
-    | MoveCursor Int
+    | CycleFocusForward
+    | CycleFocusBackward
     | AdjustValue Int
+    | ToggleSwitch
     | ToggleMode
     | AnimTick
     | Quit
@@ -82,20 +84,34 @@ handleAction :: AppAction -> AppModel -> (AppModel, Cmd AppAction)
 handleAction action model = case action of
     Quit             -> (model, CmdExit)
     AnimTick         -> (model { frame = frame model + 1 }, CmdNone)
-
-    MoveCursor dir   ->
-        let nextFocus = case (focus model, dir) of
-                (NumA, -1)  -> SwA 7
-                (SwA i, -1) -> if i > 0 then SwA (i-1) else NumB
-                (NumB, -1)  -> SwB 7
-                (SwB i, -1) -> if i > 0 then SwB (i-1) else NumA
-                (NumA, 1)   -> SwB 0
-                (SwB i, 1)  -> if i < 7 then SwB (i+1) else NumB
-                (NumB, 1)   -> SwA 0
-                (SwA i, 1)  -> if i < 7 then SwA (i+1) else NumA
-                _           -> focus model
+    CycleFocusForward ->
+        let nextFocus = case focus model of
+                SwA 0 -> NumA
+                SwA i -> SwA (i - 1)
+                NumA  -> SwB 7
+                SwB 0 -> NumB
+                SwB i -> SwB (i - 1)
+                NumB  -> SwA 7
         in (model { focus = nextFocus }, CmdNone)
-
+    CycleFocusBackward ->
+        let prevFocus = case focus model of
+                NumA  -> SwA 0
+                SwA 7 -> NumB
+                SwA i -> SwA (i + 1)
+                NumB  -> SwB 0
+                SwB 7 -> NumA
+                SwB i -> SwB (i + 1)
+        in (model { focus = prevFocus }, CmdNone)
+    ToggleSwitch ->
+        let toggle b = if b == One then Zero else One
+            getBit idx (Byte bits) = bits !! idx
+            m' = case focus model of
+                    SwA i -> let newByte = setBitAt i (toggle (getBit i (byteA model))) (byteA model)
+                             in model { byteA = newByte, strA = syncFromByte (mode model) newByte }
+                    SwB i -> let newByte = setBitAt i (toggle (getBit i (byteB model))) (byteB model)
+                             in model { byteB = newByte, strB = syncFromByte (mode model) newByte }
+                    _     -> model
+        in (m', CmdNone)
     AdjustValue delta ->
         let m' = case focus model of
                 NumA -> let current = getNumericValue (mode model) (byteA model)
@@ -112,21 +128,14 @@ handleAction action model = case action of
                                 SignedAdd   -> max (-128) (min 127 newVal)
                             newByte = int2byteSigned clamped
                         in model { byteB = newByte, strB = syncFromByte (mode model) newByte }
-                SwA i -> let targetBit = if delta > 0 then One else Zero
-                             newByte = setBitAt i targetBit (byteA model)
-                         in model { byteA = newByte, strA = syncFromByte (mode model) newByte }
-                SwB i -> let targetBit = if delta > 0 then One else Zero
-                             newByte = setBitAt i targetBit (byteB model)
-                         in model { byteB = newByte, strB = syncFromByte (mode model) newByte }
+                _ -> model
         in (m', CmdNone)
-
     TypeChar c ->
         let m' = case focus model of
                 NumA -> let ns = strA model ++ [c] in model { strA = ns, byteA = syncFromStr ns }
                 NumB -> let ns = strB model ++ [c] in model { strB = ns, byteB = syncFromStr ns }
                 _ -> model
         in (m', CmdNone)
-
     Backspace ->
         let m' = case focus model of
                 NumA -> let ns = if null (strA model) then "" else init (strA model)
@@ -135,7 +144,6 @@ handleAction action model = case action of
                         in model { strB = ns, byteB = syncFromStr ns }
                 _ -> model
         in (m', CmdNone)
-
     ToggleMode ->
         let newMode = if mode model == UnsignedAdd then SignedAdd else UnsignedAdd
             m' = model { mode = newMode, strA = syncFromByte newMode (byteA model), strB = syncFromByte newMode (byteB model) }
@@ -148,14 +156,15 @@ handleAction action model = case action of
 handleSubs :: AppModel -> Sub AppAction
 handleSubs _ = subBatch
     [ subKeyPress $ \key -> case key of
-        KeyEscape    -> Just Quit
         KeyChar 'm'  -> Just ToggleMode
-        KeyChar c | c `elem` ("0123456789-" :: String) -> Just (TypeChar c)
+        KeyChar ' '  -> Just ToggleSwitch
+        KeyEscape    -> Just Quit
+        KeyTab       -> Just CycleFocusForward
+        KeyChar 'b'  -> Just CycleFocusBackward
         KeyBackspace -> Just Backspace
-        KeyLeft      -> Just (MoveCursor 1)
-        KeyRight     -> Just (MoveCursor (-1))
         KeyUp        -> Just (AdjustValue 1)
         KeyDown      -> Just (AdjustValue (-1))
+        KeyChar c | c `elem` ("0123456789-" :: String) -> Just (TypeChar c)
         _            -> Nothing
     , subEveryMs 100 AnimTick
     ]
@@ -273,7 +282,7 @@ renderView model =
             , if isOV then withStyle StyleBold $ withColor (ColorTrue 255 0 0) (text "● OVF") else withColor (ColorTrue 40 0 0) (text "● OVF") 
             ]
         ]
-    , withColor ColorBrightBlack $ text "  CONTROLS: [Left/Right] Focus | [Up/Down] Adjust | [m] Mode | [ESC] Quit"
+    , withColor ColorBrightBlack $ text " [Tab] Next | [b] Previous | [Space] Toggle | [Up/Down] Adjust | [m] Mode | [ESC] Quit"
     ]
 
 --------------------------------------------------------------------------------
