@@ -1,17 +1,19 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# OPTIONS_GHC -Wno-unused-imports #-}
-
-module Main where
+module TUI 
+    ( logicSimApp
+    , runPostSequence
+    , runShutdownSequence
+    , getInitialSize
+    ) where
 
 import Layoutz
 import Byte    ( Byte(..), byteToIntUnsigned, byteToIntSigned, int2byteSigned )
 import Bit     ( Bit(..) )
 import Classes ( Arithmetic(add) )
-import System.IO (hSetEncoding, hSetBuffering, hSetEcho, stdout, stdin, utf8, BufferMode(..))
-import System.Exit (exitFailure)
 import Numeric (showHex, showOct)
 import Control.Concurrent (threadDelay)
 import qualified System.Console.Terminal.Size as Term (size, Window(width, height))
+
 
 --------------------------------------------------------------------------------
 -- 1. MODEL
@@ -468,7 +470,7 @@ renderView model =
     ]
 
 --------------------------------------------------------------------------------
--- 6. MAIN APP RUNNER
+-- 6. APP RUNNER HELPERS
 --------------------------------------------------------------------------------
 
 getInitialSize :: IO (Int, Int)
@@ -556,43 +558,3 @@ runShutdownSequence = do
     typeStr "0x00FF POWER DOWN COMPLETE.\n"
     delayMs 800
     putStr "\ESC[0m" -- ANSI Reset
-
-main :: IO ()
-main = do
-    hSetEncoding stdout utf8
-    hSetEncoding stdin utf8
-    hSetBuffering stdin NoBuffering
-    hSetEcho stdin False
-
-    (w, h) <- getInitialSize
-
-    -- Strict dimension enforcement
-    let minW = 76
-        minH = 34
-    
-    if w < minW || h < minH
-        then do
-            putStrLn "\ESC[31mSYSTEM HALT: TERMINAL GEOMETRY EXCEPTION\ESC[0m"
-            putStrLn $ "REQUIRED BOUNDING BOX : " ++ show minW ++ "x" ++ show minH
-            putStrLn $ "CURRENT GEOMETRY      : " ++ show w ++ "x" ++ show h
-            putStrLn "\nPlease resize your terminal window and restart the system."
-            exitFailure
-        else do
-            putStr "\ESC[?25l"   -- Hide cursor
-            putStr "\ESC[?1049h" -- Switch to alternate screen buffer
-            putStr "\ESC[?7l"    -- Disable line wrapping
-            putStr "\ESC[2J\ESC[H" -- Clear screen
-
-            hSetBuffering stdout NoBuffering
-            runPostSequence
-
-            hSetBuffering stdout (BlockBuffering Nothing)
-
-            runApp (logicSimApp w h)
-
-            hSetBuffering stdout NoBuffering
-            runShutdownSequence
-
-            putStr "\ESC[?7h"    -- Enable line wrapping
-            putStr "\ESC[?1049l" -- Restore main screen buffer
-            putStr "\ESC[?25h"   -- Show cursor
