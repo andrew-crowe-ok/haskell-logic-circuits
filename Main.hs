@@ -462,13 +462,14 @@ renderView model =
                            else map (text . padLog) (reverse $ logLines model)
           in withColor (ColorTrue 0 100 0) $ box " " logContent
 
-        , text " " -- Vertical space
-        , withStyle StyleBold $ withColor (ColorTrue 180 180 180) $ busDivider "STATE MONITOR"
+        , text " " -- Vertical space above the panel
+        , thickDivider
+        , renderHeader "STATE MONITOR"
         , renderStatusBar (focus model) (displayBase model)
         ]
-    , withStyle StyleBold $ withColor ColorBrightWhite $ text "  [Tab] Next | [b] Prev | [Space] Toggle | [m] Mode | [h] Base | [q] Quit"
+    , withStyle StyleBold $ withColor ColorBrightWhite $ 
+        text "  [Tab] Next | [b] Prev | [Space] Toggle | [m] Mode | [h] Base | [q] Quit"
     ]
-
 --------------------------------------------------------------------------------
 -- 6. MAIN APP RUNNER
 --------------------------------------------------------------------------------
